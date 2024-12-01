@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@2/out/water.css">
+    <title>Prompt Similarity Generator</title>
+</head>
+
+<body>
+    <h1>Prompt Similarity Generator</h1>
+    <input type="text" id="inputSentence" placeholder="Enter a sentence" size=60/>
+    <button id="searchButton">Find Most Similar Prompt</button>
+
+    <div id="output"></div>
+
+    <!-- The new module type allows import to be used -->
+    <script type="module">
+        import { pipeline } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2';
+
+        // Global variables to store pre-calculated embeddings and prompts
+        let promptEmbeddings = [];
+        let prompts = [];
+        let extractor = null;
+
+        // Function to parse CSV 
+        async function parseCSV() {
+            const response = await fetch('prompts.csv');
+            const csvText = await response.text();
+            const rows = csvText.split('\n').slice(1); // Skip header
+            
+            return rows
+                .filter(row => row.trim() !== '') // Remove empty rows
+                .map(row => {
+                    const [act, prompt] = row.split('","').map(cell => cell.replace(/^"|"$/g, ''));
+                    return { act, prompt };
+                });
+        }
+
+        // Pre-calculate embeddings when the page loads
+        async function initializeEmbeddings() {
+            // Parse CSV first
+            prompts = await parseCSV();
+
+            // Initialize the feature extraction pipeline
+            extractor = await pipeline('feature-extraction', 'Xenova/bert-base-uncased', { revision: 'default' });
+
+            // Pre-calculate embeddings for all prompts
+            promptEmbeddings = [];
+            for (let { prompt } of prompts) {
+                const embed = await extractor(prompt, { pooling: 'mean', normalize: true });
+                promptEmbeddings.push(embed['data']);
+            }
+
+            // Enable the search button once embeddings are ready
+            document.getElementById('searchButton').disabled = false;
+            document.getElementById('searchButton').textContent = 'Find Most Similar Prompt';
+        }
+
+        // Main function to find most similar prompt
+        async function findSimilarPrompt() {
+            const inputSentence = document.getElementById("inputSentence").value;
+
+            // Encode the input sentence
+            let inputEncoded = await extractor(inputSentence, { pooling: 'mean', normalize: true });
+            let inputEmbeddings = inputEncoded['data'];
+
+            // Calculate cosine similarity
+            const similarities = prompts.map(({ act, prompt }, index) => ({
+                act,
+                prompt,
+                similarity: cosineSimilarity(inputEmbeddings, promptEmbeddings[index])
+            }));
+
+            // Sort by similarity in descending order
+            similarities.sort((a, b) => b.similarity - a.similarity);
+
+            // Get the most similar prompt
+            const mostSimilar = similarities[0];
+
+            // Display results
+            const output = document.getElementById("output");
+            output.innerHTML = `
+                <h2>Most Similar Prompt</h2>
+                <p><strong>Act:</strong> ${mostSimilar.act}</p>
+                <p><strong>Similarity Score:</strong> ${mostSimilar.similarity.toFixed(4)}</p>
+                <h3>Prompt:</h3>
+                <p>${mostSimilar.prompt}</p>
+            `;
+        }
+
+        function cosineSimilarity(vecA, vecB) {
+            const dotProduct = vecA.reduce((sum, val, i) => sum + val * vecB[i], 0);
+            const magnitudeA = Math.sqrt(vecA.reduce((sum, val) => sum + val * val, 0));
+            const magnitudeB = Math.sqrt(vecB.reduce((sum, val) => sum + val * val, 0));
+            return dotProduct / (magnitudeA * magnitudeB);
+        }
+
+        // Disable the button initially and start pre-calculating embeddings
+        document.getElementById('searchButton').disabled = true;
+        document.getElementById('searchButton').textContent = 'Loading...';
+        initializeEmbeddings();
+
+        // Make sure the button calls the correct function
+        document.getElementById('searchButton').addEventListener('click', findSimilarPrompt);
+    </script>
+</body>
+
+</html>
